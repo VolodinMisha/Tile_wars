@@ -131,6 +131,15 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     player_bot_3: 'VORTEX-03 (VIOLET)',
     player_bot_4: 'NEXUS-04 (AZURE)',
     player_neutral: 'NEUTRAL GRID',
+
+    // PWA & Offline
+    pwa_install_btn: 'INSTALL APP',
+    pwa_install_title: 'INSTALL TILE WARS (PWA)',
+    pwa_installed: 'SYSTEM INSTALLED',
+    pwa_ios_guide_title: 'IOS DEPLOYMENT GUIDE',
+    pwa_ios_guide_desc: 'Tap Safari Share icon -> Select "Add to Home Screen" to install standalone terminal.',
+    pwa_offline_banner: 'OFFLINE MODE • LOCAL TACTICAL CACHE ACTIVE',
+    btn_close: 'CLOSE',
   },
 
   ua: {
@@ -275,6 +284,15 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     player_bot_3: 'VORTEX-03 (ФІОЛЕТОВИЙ)',
     player_bot_4: 'NEXUS-04 (БЛАКИТНИЙ)',
     player_neutral: 'НЕЙТРАЛЬНИЙ СЕКТОР',
+
+    // PWA & Offline
+    pwa_install_btn: 'ВСТАНОВИТИ ЗАСТОСУНОК',
+    pwa_install_title: 'ВСТАНОВИТИ TILE WARS (PWA)',
+    pwa_installed: 'СИСТЕМУ ВСТАНОВЛЕНО',
+    pwa_ios_guide_title: 'ІНСТРУКЦІЯ ДЛЯ IOS',
+    pwa_ios_guide_desc: 'Натисніть кнопку "Поділитися" в Safari -> Виберіть "На початковий екран" для встановлення.',
+    pwa_offline_banner: 'ОФЛАЙН РЕЖИМ • АКТИВНО ЛОКАЛЬНИЙ КЕШ',
+    btn_close: 'ЗАКРИТИ',
   },
 };
 

@@ -12,6 +12,7 @@ import {
 import { CAMPAIGN_LEVELS } from '../game/campaign';
 import { t } from '../game/i18n';
 import { soundFx } from '../game/audio';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface PreGameMenuProps {
   step: number;
@@ -146,13 +147,16 @@ export const PreGameMenu: React.FC<PreGameMenuProps> = ({
               THEME: {isDark ? 'DARK' : 'LIGHT'}
             </button>
           </div>
-          <button
-            type="button"
-            onClick={toggleSound}
-            className={`px-2 py-0.5 border cursor-pointer hover:opacity-80 ${borderCol}`}
-          >
-            SND: {settings.soundEnabled ? 'ON' : 'OFF'}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={toggleSound}
+              className={`px-2 py-0.5 border cursor-pointer hover:opacity-80 ${borderCol}`}
+            >
+              SND: {settings.soundEnabled ? 'ON' : 'OFF'}
+            </button>
+            <PWAInstallButton language={lang} theme={settings.theme} compact />
+          </div>
         </div>
       </div>
 
@@ -247,6 +251,12 @@ export const PreGameMenu: React.FC<PreGameMenuProps> = ({
                   {settings.vibrationEnabled ? t(lang, 'status_on') : t(lang, 'status_off')}
                 </span>
               </button>
+
+              {/* In-app PWA install action row */}
+              <div className={`p-2.5 border flex justify-between items-center text-xs ${borderCol} ${idleBtnBg}`}>
+                <span className="font-semibold">&gt; {t(lang, 'pwa_install_title')}</span>
+                <PWAInstallButton language={lang} theme={settings.theme} />
+              </div>
             </div>
           </div>
         )}

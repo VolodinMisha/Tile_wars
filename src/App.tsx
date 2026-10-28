@@ -30,6 +30,7 @@ import { TerminalOverlay } from './components/TerminalOverlay';
 import { PreGameMenu } from './components/PreGameMenu';
 import { GameBoard } from './components/GameBoard';
 import { TacticalHUD } from './components/TacticalHUD';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 const STORAGE_KEY_CAMPAIGN = 'tilewars_campaign_unlocked';
 
@@ -475,6 +476,7 @@ export default function App() {
 
   return (
     <TerminalOverlay theme={settings.theme}>
+      <OfflineIndicator language={settings.language} theme={settings.theme} />
       {screen === 'menu' ? (
         <PreGameMenu
           step={menuStep}

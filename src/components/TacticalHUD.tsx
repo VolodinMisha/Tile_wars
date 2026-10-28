@@ -11,6 +11,7 @@ import { t } from '../game/i18n';
 import { PLAYERS_INFO, getPlayerColor } from '../game/constants';
 import { soundFx } from '../game/audio';
 import { MAX_CELL_UNITS, canReinforceCell } from '../game/rules';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface TacticalHUDProps {
   turn: number;
@@ -152,6 +153,8 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
             >
               ABORT
             </button>
+
+            <PWAInstallButton language={lang} theme={settings.theme} compact />
           </div>
         </div>
 

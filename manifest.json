@@ -1,21 +1,60 @@
 {
-  "background_color": "#ffffff",
-  "description": "Tile Wars: Turn-based hex strategy wargame with 20-level mini-campaign, custom games, manual reinforcements, and retro military command terminal.",
-  "dir": "ltr",
+  "$schema": "https://json.schemastore.org/web-manifest-combined.json",
+  "id": "./index.html",
+  "name": "Tile Wars: Tactical Terminal",
+  "short_name": "Tile Wars",
+  "description": "Turn-based retro hex strategy game",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
-  "name": "Tile_wars",
   "orientation": "portrait",
-  "scope": "/",
-  "short_name": "Tile_wars",
-  "start_url": "/",
-  "theme_color": "#ffffff",
-  "id": "TW",
-  "lang": "uk",
-  "display_override": [
-    "window-controls-overlay"
-  ],
+  "background_color": "#0a0c0a",
+  "theme_color": "#00ff66",
   "categories": [
-    "entertainment",
-    "games"
+    "games",
+    "entertainment"
+  ],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "./icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "./icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Tile Wars Hex Command Tactical Terminal"
+    }
   ]
 }
