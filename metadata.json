@@ -1,0 +1,6 @@
+{
+  "name": "HEX INFLUENCE // Tactical Terminal",
+  "description": "Retro-military terminal turn-based hex strategy game inspired by Influence, featuring EM storms, system overclocking, touch pan/zoom, and full EN/UA localization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
