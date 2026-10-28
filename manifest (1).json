@@ -1,0 +1,21 @@
+{
+  "background_color": "#ffffff",
+  "description": "Tile Wars: Turn-based hex strategy wargame with 20-level mini-campaign, custom games, manual reinforcements, and retro military command terminal.",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "Tile_wars",
+  "orientation": "portrait",
+  "scope": "/",
+  "short_name": "Tile_wars",
+  "start_url": "/",
+  "theme_color": "#ffffff",
+  "id": "TW",
+  "lang": "uk",
+  "display_override": [
+    "window-controls-overlay"
+  ],
+  "categories": [
+    "entertainment",
+    "games"
+  ]
+}
