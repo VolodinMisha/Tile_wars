@@ -13,7 +13,6 @@ import {
 import { generateBoardCells } from './game/hex';
 import {
   resolveCombat,
-  executeFriendlyTransfer,
   validateMove,
   updateFogOfWar,
   calculateReinforcements,
@@ -23,7 +22,7 @@ import {
   checkAndExecuteEmergencyTransfer,
   checkGameState,
 } from './game/rules';
-import { CAMPAIGN_LEVELS } from './game/campaign';
+import { CAMPAIGN_LEVELS, getStaticCampaignMap } from './game/campaign';
 import { computeBotMoves } from './game/bot';
 import { soundFx } from './game/audio';
 import { TerminalOverlay } from './components/TerminalOverlay';
@@ -137,12 +136,15 @@ export default function App() {
       s.selectedCampaignLevel = lvlConfig.level;
     }
 
-    const initialCells = generateBoardCells(
-      s.mapSize,
-      s.botCount,
-      s.modes.symmetricMap,
-      s.modes.swarmStart
-    );
+    const isCampaign = s.gameType === 'campaign' || campaignLevelIndex !== undefined;
+    const initialCells = isCampaign
+      ? getStaticCampaignMap(s.selectedCampaignLevel)
+      : generateBoardCells(
+          s.mapSize,
+          s.botCount,
+          s.modes.symmetricMap,
+          s.modes.swarmStart
+        );
 
     if (s.modes.fogOfWar) {
       updateFogOfWar(initialCells, 0);
@@ -237,20 +239,6 @@ export default function App() {
       return;
     }
 
-    // Friendly Transfer
-    if (target.owner === selectedCell.owner) {
-      soundFx.playClick();
-      executeFriendlyTransfer(selectedCell, target);
-      addLog(
-        'transfer',
-        `Tactical relocation: Forces transferred from [${selectedCell.q},${selectedCell.r}] to [${target.q},${target.r}].`,
-        `Тактична передислокація: Сили переведено з [${selectedCell.q},${selectedCell.r}] до [${target.q},${target.r}].`
-      );
-      setCells([...cells]);
-      setSelectedCellId(null);
-      return;
-    }
-
     // Enemy Assault
     soundFx.playAttack();
     const result = resolveCombat(selectedCell.units, target.units, overclockActive);
@@ -342,11 +330,8 @@ export default function App() {
         const origin = activeCells.find(c => c.id === move.origin.id);
         const target = activeCells.find(c => c.id === move.target.id);
 
-        if (origin && target && origin.units > 1 && !target.stormActive) {
-          if (target.owner === origin.owner) {
-            executeFriendlyTransfer(origin, target);
-          } else {
-            const combat = resolveCombat(origin.units, target.units, move.overclock);
+        if (origin && target && origin.units > 1 && !target.stormActive && target.owner !== origin.owner) {
+          const combat = resolveCombat(origin.units, target.units, move.overclock);
             if (combat.success) {
               origin.units = combat.attackerUnitsRemaining;
               target.units = combat.defenderUnitsRemaining;
@@ -363,7 +348,6 @@ export default function App() {
                 origin.burnedOutTurns = 2;
               }
             }
-          }
           activeCells = [...activeCells];
           setCells(activeCells);
         }

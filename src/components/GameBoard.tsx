@@ -56,15 +56,18 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     [cells, selectedCellId]
   );
 
-  // Target options for the selected cell
+  // Keep reference to latest cells without re-triggering camera calculations
+  const cellsRef = useRef(cells);
+  cellsRef.current = cells;
+
+  // Target options for the selected cell (Strictly enemy or neutral; friendly transfer is removed)
   const targetOptions = useMemo(() => {
     if (!selectedCell || !isHumanTurn || selectedCell.units <= 1) return [];
 
     return cells
-      .filter(target => areHexesAdjacent(selectedCell, target))
+      .filter(target => areHexesAdjacent(selectedCell, target) && target.owner !== selectedCell.owner)
       .map(target => {
         const isStorm = target.stormActive;
-        const isAlly = target.owner === selectedCell.owner;
         const p1 = hexToPixel(selectedCell, hexRadius);
         const p2 = hexToPixel(target, hexRadius);
         const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
@@ -72,7 +75,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         return {
           target,
           isStorm,
-          isAlly,
           p1,
           p2,
           angle,
@@ -80,9 +82,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       });
   }, [selectedCell, cells, isHumanTurn]);
 
-  // Center camera on grid
+  // Center camera on grid - only when initial mount or resetTrigger (RESET CAM button) is pressed
   const centerCamera = useCallback(() => {
-    if (!containerRef.current || cells.length === 0) return;
+    const currentCells = cellsRef.current;
+    if (!containerRef.current || currentCells.length === 0) return;
     const rect = containerRef.current.getBoundingClientRect();
     const clientWidth = rect.width || window.innerWidth || 390;
     const clientHeight = rect.height || window.innerHeight || 844;
@@ -92,7 +95,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     let minY = Infinity;
     let maxY = -Infinity;
 
-    cells.forEach(c => {
+    currentCells.forEach(c => {
       const { x, y } = hexToPixel(c, hexRadius);
       minX = Math.min(minX, x - hexRadius);
       maxX = Math.max(maxX, x + hexRadius);
@@ -119,8 +122,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       y: verticalCenterTarget - gridCenterY * scale,
       k: scale,
     });
-  }, [cells]);
+  }, []);
 
+  // Camera only resets on mount or when explicit resetTrigger is fired
   useEffect(() => {
     centerCamera();
   }, [centerCamera, resetTrigger]);
@@ -173,22 +177,31 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     dragRef.current.isDragging = false;
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.88;
-    const newK = Math.min(2.5, Math.max(0.35, transform.k * zoomFactor));
+  // Native wheel event listener to allow preventDefault without passive listener violation
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
 
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.88;
+      const rect = el.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
 
-    setTransform(prev => ({
-      x: mouseX - ((mouseX - prev.x) * newK) / prev.k,
-      y: mouseY - ((mouseY - prev.y) * newK) / prev.k,
-      k: newK,
-    }));
-  };
+      setTransform(prev => {
+        const nextK = Math.min(2.5, Math.max(0.35, prev.k * zoomFactor));
+        return {
+          x: mouseX - ((mouseX - prev.x) * nextK) / prev.k,
+          y: mouseY - ((mouseY - prev.y) * nextK) / prev.k,
+          k: nextK,
+        };
+      });
+    };
+
+    el.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => el.removeEventListener('wheel', onWheelNative);
+  }, []);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 2) {
@@ -230,28 +243,26 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
     if (fogOfWarEnabled && !cell.revealed) return;
 
-    // Check if clicked cell is adjacent attack target
-    if (selectedCell && areHexesAdjacent(selectedCell, cell) && selectedCell.units > 1) {
+    // If clicking an owned friendly cell: select it (or toggle off)
+    if (cell.owner === 0) {
+      if (selectedCell && selectedCell.id === cell.id) {
+        soundFx.playClick();
+        onSelectCell(null);
+      } else {
+        soundFx.playSelect();
+        onSelectCell(cell);
+      }
+      return;
+    }
+
+    // If clicking an adjacent enemy or neutral attack target
+    if (selectedCell && areHexesAdjacent(selectedCell, cell) && selectedCell.units > 1 && cell.owner !== selectedCell.owner) {
       onExecuteAction(cell);
       return;
     }
 
-    // If cell is owned by human:
-    if (cell.owner === 0) {
-      // If already selected, deselect
-      if (selectedCell && selectedCell.id === cell.id) {
-        soundFx.playClick();
-        onSelectCell(null);
-        return;
-      }
-
-      // Select for maneuvering or reinforcement
-      soundFx.playSelect();
-      onSelectCell(cell);
-    } else {
-      // Deselect when clicking neutral/enemy
-      onSelectCell(null);
-    }
+    // Deselect when clicking non-adjacent neutral/enemy
+    onSelectCell(null);
   };
 
   // Direct reinforcement button on cell
@@ -272,7 +283,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
-      onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       className="relative flex-1 w-full h-full overflow-hidden select-none cursor-grab active:cursor-grabbing touch-none"
@@ -480,8 +490,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             );
           })}
 
-          {/* Dynamic Interactive Attack / Movement Arrows */}
-          {targetOptions.map(({ target, isStorm, isAlly, p1, p2, angle }) => {
+          {/* Dynamic Interactive Attack Arrows */}
+          {targetOptions.map(({ target, isStorm, p1, p2, angle }) => {
             const startDist = 24;
             const endDist = 28;
             const sx = p1.x + Math.cos(angle) * startDist;
@@ -542,9 +552,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
             const arrowColor = overclockActive
               ? '#f59e0b'
-              : isAlly
-              ? isDark ? '#38bdf8' : '#0284c7'
-              : isDark ? '#4ade80' : '#15803d';
+              : isDark
+              ? '#4ade80'
+              : '#15803d';
 
             const markerId = overclockActive
               ? 'url(#arrow-overclock)'
@@ -597,7 +607,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                     fontWeight="bold"
                     fontFamily="monospace"
                   >
-                    {isAlly ? '+MOVE' : overclockActive ? '+OC' : 'ASSAULT'}
+                    {overclockActive ? '+OC' : 'ASSAULT'}
                   </text>
                 </g>
               </g>

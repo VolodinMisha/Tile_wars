@@ -6,8 +6,13 @@ export const BURNOUT_PENALTY_TURNS = 2;
 export const STORM_DURATION_TURNS = 3;
 
 /**
- * Resolves combat between attacker and defender.
- * Attacker commits (attackerUnits - 1) into the assault.
+ * Resolves combat using direct subtraction combat rules between attacker and defender.
+ * Direct subtraction:
+ * - When A attacks E:
+ *   - A > E: Attacker wins! Defender eliminated (-E). Surviving units (A - E) occupy target. Origin retains 1.
+ *   - A < E: Attacker repulsed! Defender drops directly to (E - A). Origin retains 1.
+ *   - A == E: Balanced 50/50 engagement.
+ * - Overclock: grants +ATK bonus (+2 or +35%). If attack fails with overclock, backfires with burnout cooldown.
  */
 export function resolveCombat(
   attackerUnits: number,
@@ -15,39 +20,46 @@ export function resolveCombat(
   overclock: boolean,
   deterministicSeed?: number
 ): CombatResult {
-  const committedUnits = Math.max(1, attackerUnits - 1);
+  const committedUnits = attackerUnits;
 
   // Attack power calculation
   let effectiveAttackPower = committedUnits;
+  let overclockBonus = 0;
   if (overclock) {
-    // 35% boost, minimum +2 ATK bonus
-    const bonus = Math.max(2, Math.round(committedUnits * 0.35));
-    effectiveAttackPower += bonus;
+    overclockBonus = Math.max(2, Math.round(committedUnits * 0.35));
+    effectiveAttackPower += overclockBonus;
   }
 
-  // Small tactical variance for exciting wargame feel
-  const randVariance = deterministicSeed !== undefined
-    ? deterministicSeed
-    : (Math.random() * 0.6 - 0.3); // -0.3 to +0.3
+  let success = false;
+  let overclockBackfired = false;
 
-  const attackerScore = effectiveAttackPower + randVariance;
-  const defenderScore = defenderUnits;
-
-  const success = attackerScore > defenderScore;
+  if (effectiveAttackPower > defenderUnits) {
+    success = true;
+  } else if (effectiveAttackPower < defenderUnits) {
+    success = false;
+    if (overclock) {
+      overclockBackfired = true;
+    }
+  } else {
+    // Exactly equal forces (e.g. 3 vs 3): balanced 50/50 engagement
+    const roll = deterministicSeed !== undefined ? deterministicSeed : Math.random();
+    success = roll >= 0.5;
+    if (!success && overclock) {
+      overclockBackfired = true;
+    }
+  }
 
   if (success) {
-    // Attacker takes territory
-    // Defender is eliminated
+    // Attacker captures target! Defender is eliminated.
     const defenderLosses = defenderUnits;
-    // Attacker losses depend on ratio
-    const ratio = defenderUnits / Math.max(1, effectiveAttackPower);
-    const attackerLosses = Math.min(committedUnits - 1, Math.floor(committedUnits * ratio * 0.7));
-    const unitsMovingIn = Math.max(1, committedUnits - attackerLosses);
+    // Direct subtraction: surviving units occupy target (minimum 1, capped at MAX_CELL_UNITS)
+    const survivingUnits = Math.min(MAX_CELL_UNITS, Math.max(1, effectiveAttackPower - defenderUnits));
+    const attackerLosses = Math.min(attackerUnits - 1, defenderUnits);
 
     return {
       success: true,
-      attackerUnitsRemaining: 1, // 1 stays in origin
-      defenderUnitsRemaining: unitsMovingIn, // new garrison in target
+      attackerUnitsRemaining: 1, // 1 minimal garrison remains in origin
+      defenderUnitsRemaining: survivingUnits, // surviving units occupy target
       overclockUsed: overclock,
       overclockBackfired: false,
       attackerLosses,
@@ -56,48 +68,40 @@ export function resolveCombat(
     };
   } else {
     // Defender holds!
-    if (overclock) {
-      // Overclock backfire: heavy losses & burnout penalty
-      const defenderLosses = Math.min(defenderUnits - 1, Math.floor(committedUnits * 0.4));
-      return {
-        success: false,
-        attackerUnitsRemaining: 1, // dropped to 1 unit
-        defenderUnitsRemaining: Math.max(1, defenderUnits - defenderLosses),
-        overclockUsed: true,
-        overclockBackfired: true, // triggers burnout cooldown
-        attackerLosses: committedUnits,
-        defenderLosses,
-        captured: false,
-      };
-    } else {
-      // Standard attack failure
-      const defenderLosses = Math.min(defenderUnits - 1, Math.floor(committedUnits * 0.6));
-      return {
-        success: false,
-        attackerUnitsRemaining: 1,
-        defenderUnitsRemaining: Math.max(1, defenderUnits - defenderLosses),
-        overclockUsed: false,
-        overclockBackfired: false,
-        attackerLosses: committedUnits,
-        defenderLosses,
-        captured: false,
-      };
-    }
+    // Direct subtraction: attacker committed forces subtract directly from defender
+    // e.g., 3 units attacking 5 units -> defender drops to 2 units (5 - 3 = 2)
+    const defenderUnitsRemaining = Math.max(1, defenderUnits - effectiveAttackPower);
+    const defenderLosses = defenderUnits - defenderUnitsRemaining;
+    const attackerLosses = attackerUnits - 1;
+
+    return {
+      success: false,
+      attackerUnitsRemaining: 1, // origin cell depleted to 1 minimal garrison
+      defenderUnitsRemaining,
+      overclockUsed: overclock,
+      overclockBackfired,
+      attackerLosses,
+      defenderLosses,
+      captured: false,
+    };
   }
 }
 
 /**
- * Validates whether an attack or transfer order is legal
+ * Validates whether an attack order is legal. Friendly cell transfers are strictly forbidden.
  */
 export function validateMove(
   origin: HexCell,
   target: HexCell
-): { valid: boolean; reason?: 'not_adjacent' | 'insufficient_units' | 'storm_blocked' | 'same_cell' } {
+): { valid: boolean; reason?: 'not_adjacent' | 'insufficient_units' | 'storm_blocked' | 'same_cell' | 'friendly_cell' } {
   if (origin.id === target.id) {
     return { valid: false, reason: 'same_cell' };
   }
   if (!areHexesAdjacent(origin, target)) {
     return { valid: false, reason: 'not_adjacent' };
+  }
+  if (origin.owner === target.owner) {
+    return { valid: false, reason: 'friendly_cell' };
   }
   if (origin.units <= 1) {
     return { valid: false, reason: 'insufficient_units' };
@@ -106,17 +110,6 @@ export function validateMove(
     return { valid: false, reason: 'storm_blocked' };
   }
   return { valid: true };
-}
-
-/**
- * Executes a friendly reinforcement transfer from origin to adjacent target
- */
-export function executeFriendlyTransfer(origin: HexCell, target: HexCell): void {
-  const transferUnits = origin.units - 1;
-  const availableSpace = MAX_CELL_UNITS - target.units;
-  const actualTransfer = Math.min(transferUnits, Math.max(1, availableSpace));
-  origin.units -= actualTransfer;
-  target.units = Math.min(MAX_CELL_UNITS, target.units + actualTransfer);
 }
 
 /**

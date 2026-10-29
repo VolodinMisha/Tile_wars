@@ -1,3 +1,8 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { HexCoord, HexCell, MapSize, CellOwner } from './types';
 
 // The 6 axial directions for a pointy-topped or flat-topped hex grid
@@ -75,7 +80,85 @@ export function generateHexCoords(radius: number): HexCoord[] {
 }
 
 /**
- * Generates the full initial game board cells
+ * Ensures all hex coordinates in the list form a single contiguous component via BFS
+ */
+function filterConnectedComponent(coords: HexCoord[]): HexCoord[] {
+  if (coords.length <= 1) return coords;
+
+  const key = (c: HexCoord) => `${c.q},${c.r}`;
+  const coordMap = new Map<string, HexCoord>();
+  coords.forEach(c => coordMap.set(key(c), c));
+
+  // Find center or first available
+  const start = coordMap.get('0,0') || coords[0];
+  const visited = new Set<string>();
+  const queue: HexCoord[] = [start];
+  visited.add(key(start));
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    for (const dir of HEX_DIRECTIONS) {
+      const neighborKey = `${curr.q + dir.q},${curr.r + dir.r}`;
+      if (coordMap.has(neighborKey) && !visited.has(neighborKey)) {
+        visited.add(neighborKey);
+        queue.push(coordMap.get(neighborKey)!);
+      }
+    }
+  }
+
+  // Return only visited connected coords
+  return coords.filter(c => visited.has(key(c)));
+}
+
+/**
+ * Carves out obstacles to create distinct central chokepoints and outer side-tunnels / flank paths
+ */
+function carveFlankingTunnels(
+  coords: HexCoord[],
+  radius: number,
+  isSymmetric: boolean,
+  totalPlayers: number
+): HexCoord[] {
+  if (radius < 3) return coords; // Keep small maps compact
+
+  const key = (q: number, r: number) => `${q},${r}`;
+  const coordSet = new Set(coords.map(c => key(c.q, c.r)));
+
+  // Identify cells to remove to create side tunnels:
+  // We leave the center (q=0, r=0), leave the outer perimeter (dist === radius)
+  // and carve gaps in the intermediate ring (dist === radius - 1 or radius - 2)
+  const holesToRemove = new Set<string>();
+
+  if (isSymmetric) {
+    const symmetrySectors = Math.max(3, totalPlayers);
+    for (let i = 0; i < symmetrySectors; i++) {
+      const angle = (i * 2 * Math.PI) / symmetrySectors;
+      // Mid-radius obstacle
+      const targetDist = radius > 3 ? radius - 2 : radius - 1;
+      const oq = Math.round(Math.cos(angle) * targetDist);
+      const or = Math.round(Math.sin(angle) * targetDist);
+
+      if (coordSet.has(key(oq, or)) && !(oq === 0 && or === 0)) {
+        holesToRemove.add(key(oq, or));
+      }
+    }
+  } else {
+    // Semi-random side tunnel carving
+    coords.forEach(c => {
+      const dist = (Math.abs(c.q) + Math.abs(c.q + c.r) + Math.abs(c.r)) / 2;
+      if (dist === radius - 1 && Math.random() < 0.28 && !(c.q === 0 && c.r === 0)) {
+        holesToRemove.add(key(c.q, c.r));
+      }
+    });
+  }
+
+  const remaining = coords.filter(c => !holesToRemove.has(key(c.q, c.r)));
+  return filterConnectedComponent(remaining);
+}
+
+/**
+ * Generates the full initial game board cells for custom / skirmish games.
+ * Features ~65% symmetrical maps with flanking tunnels and bypass corridors.
  */
 export function generateBoardCells(
   size: MapSize,
@@ -84,8 +167,16 @@ export function generateBoardCells(
   swarmStart: boolean
 ): HexCell[] {
   const radius = getMapRadius(size);
-  const coords = generateHexCoords(radius);
   const totalPlayers = botCount + 1; // 0 = Player, 1..botCount = Bots
+
+  // ~65% of skirmish maps feature symmetrical layout
+  const isSymmetric = symmetric || Math.random() < 0.65;
+
+  let coords = generateHexCoords(radius);
+
+  if (!swarmStart) {
+    coords = carveFlankingTunnels(coords, radius, isSymmetric, totalPlayers);
+  }
 
   const cells: HexCell[] = coords.map(c => ({
     id: `${c.q}_${c.r}`,
@@ -107,48 +198,57 @@ export function generateBoardCells(
       cell.owner = owner;
       cell.units = Math.floor(Math.random() * 4) + 2; // 2 to 5 units
     });
-  } else if (symmetric) {
-    // Pick symmetric starting anchors at equidistant border positions
-    const anchorCoords: HexCoord[] = [];
+  } else if (isSymmetric) {
+    // Symmetrical starting deployment along perimeter flanking tunnels
     const step = 6 / totalPlayers;
+    const anchorCoords: HexCoord[] = [];
+
     for (let i = 0; i < totalPlayers; i++) {
       const dirIndex = Math.floor(i * step) % 6;
-      const dir = HEX_DIRECTIONS[dirIndex];
-      anchorCoords.push({
-        q: dir.q * radius,
-        r: dir.r * radius,
-      });
-    }
+      const angle = (dirIndex * Math.PI) / 3;
+      const targetQ = Math.round(Math.cos(angle) * radius);
+      const targetR = Math.round(Math.sin(angle) * radius);
 
-    anchorCoords.forEach((anchor, pIndex) => {
-      const cell = cells.find(c => c.q === anchor.q && c.r === anchor.r);
-      if (cell) {
-        cell.owner = pIndex as CellOwner;
-        cell.units = 6;
-      }
-      // Give 1 immediate neighbor to start with solid foothold
-      const neighbors = getNeighbors(anchor);
-      for (const n of neighbors) {
-        const nCell = cells.find(c => c.q === n.q && c.r === n.r);
-        if (nCell && nCell.owner === -1) {
-          nCell.owner = pIndex as CellOwner;
-          nCell.units = 4;
-          break;
+      // Find closest surviving cell on map
+      let closest = cells.filter(c => c.owner === -1)[0];
+      let minDist = Infinity;
+      for (const c of cells) {
+        if (anchorCoords.some(a => a.q === c.q && a.r === c.r)) continue;
+        const d = Math.hypot(c.q - targetQ, c.r - targetR);
+        if (d < minDist) {
+          minDist = d;
+          closest = c;
         }
       }
-    });
+
+      if (closest) {
+        anchorCoords.push({ q: closest.q, r: closest.r });
+        closest.owner = i as CellOwner;
+        closest.units = 6;
+
+        // Give 1 neighbor along the flanking path
+        const neighbors = getNeighbors(closest);
+        for (const n of neighbors) {
+          const nCell = cells.find(c => c.q === n.q && c.r === n.r);
+          if (nCell && nCell.owner === -1) {
+            nCell.owner = i as CellOwner;
+            nCell.units = 4;
+            break;
+          }
+        }
+      }
+    }
   } else {
     // Standard random placement with minimum distance separation
     const available = [...cells].sort(() => Math.random() - 0.5);
     const chosen: HexCell[] = [];
 
     for (let p = 0; p < totalPlayers; p++) {
-      // Find a candidate that is at least radius distance from others
       let bestCandidate = available.find(cand => {
-        return chosen.every(ch => getHexDistance(cand, ch) >= Math.max(2, Math.floor(radius * 0.9)));
+        return chosen.every(ch => getHexDistance(cand, ch) >= Math.max(2, Math.floor(radius * 0.8)));
       });
       if (!bestCandidate) {
-        bestCandidate = available[p * 3] || available[p];
+        bestCandidate = available[p * 2] || available[p];
       }
       if (bestCandidate) {
         chosen.push(bestCandidate);

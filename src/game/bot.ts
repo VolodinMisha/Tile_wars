@@ -1,6 +1,6 @@
 import { HexCell, CellOwner, BotDifficulty } from './types';
 import { areHexesAdjacent, getNeighbors } from './hex';
-import { resolveCombat, executeFriendlyTransfer, validateMove } from './rules';
+import { resolveCombat, validateMove } from './rules';
 
 export interface BotAction {
   origin: HexCell;
@@ -119,21 +119,6 @@ export function computeBotMoves(
           }
         }
       }
-
-      // If no attack, reinforce frontline from deep backline
-      if (!chosenTarget && friendlyTargets.length > 0 && currentUnits >= 4) {
-        // Find friendly neighbor that is closer to enemy
-        const frontlineFriend = friendlyTargets.find(f => {
-          const fNeighbors = getNeighbors(f);
-          return cells.some(
-            c => fNeighbors.some(fn => fn.q === c.q && fn.r === c.r) &&
-                 (cellSimOwner.get(c.id) ?? c.owner) !== botOwner
-          );
-        });
-        if (frontlineFriend) {
-          chosenTarget = frontlineFriend;
-        }
-      }
     }
 
     if (chosenTarget) {
@@ -145,10 +130,9 @@ export function computeBotMoves(
 
       // Update sim
       cellSimUnits.set(origin.id, 1);
-      if ((cellSimOwner.get(chosenTarget.id) ?? chosenTarget.owner) !== botOwner) {
-        cellSimOwner.set(chosenTarget.id, botOwner);
-        cellSimUnits.set(chosenTarget.id, Math.max(1, currentUnits - 2));
-      }
+      cellSimOwner.set(chosenTarget.id, botOwner);
+      const targetCurr = cellSimUnits.get(chosenTarget.id) || chosenTarget.units;
+      cellSimUnits.set(chosenTarget.id, Math.max(1, currentUnits - targetCurr));
     }
   }
 
