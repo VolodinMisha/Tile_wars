@@ -178,17 +178,28 @@ export function generateBoardCells(
     coords = carveFlankingTunnels(coords, radius, isSymmetric, totalPlayers);
   }
 
-  const cells: HexCell[] = coords.map(c => ({
-    id: `${c.q}_${c.r}`,
-    q: c.q,
-    r: c.r,
-    owner: -1,
-    units: Math.floor(Math.random() * 3) + 1, // Neutral units 1-3
-    stormActive: false,
-    stormTurnsRemaining: 0,
-    burnedOutTurns: 0,
-    revealed: false,
-  }));
+  const cells: HexCell[] = coords.map(c => {
+    // The vast majority of neutral tiles spawn with 1 unit of strength.
+    // Rarely, neutral tiles located along direct shortcut paths / chokepoints spawn with 2 or 3 units.
+    const dist = (Math.abs(c.q) + Math.abs(c.q + c.r) + Math.abs(c.r)) / 2;
+    const isShortcutOrChoke = dist <= Math.max(1, Math.floor(radius * 0.4)) || c.q === 0 || c.r === 0 || c.q + c.r === 0;
+    let units = 1;
+    if (isShortcutOrChoke && Math.random() < 0.12) {
+      units = Math.random() < 0.7 ? 2 : 3;
+    }
+
+    return {
+      id: `${c.q}_${c.r}`,
+      q: c.q,
+      r: c.r,
+      owner: -1,
+      units,
+      stormActive: false,
+      stormTurnsRemaining: 0,
+      burnedOutTurns: 0,
+      revealed: false,
+    };
+  });
 
   if (swarmStart) {
     // Distribute every cell across player and bots
@@ -196,10 +207,10 @@ export function generateBoardCells(
     shuffled.forEach((cell, idx) => {
       const owner = (idx % totalPlayers) as CellOwner;
       cell.owner = owner;
-      cell.units = Math.floor(Math.random() * 4) + 2; // 2 to 5 units
+      cell.units = 1;
     });
   } else if (isSymmetric) {
-    // Symmetrical starting deployment along perimeter flanking tunnels
+    // Symmetrical starting deployment along perimeter: exactly 1 owned tile with 1 unit per faction
     const step = 6 / totalPlayers;
     const anchorCoords: HexCoord[] = [];
 
@@ -224,22 +235,11 @@ export function generateBoardCells(
       if (closest) {
         anchorCoords.push({ q: closest.q, r: closest.r });
         closest.owner = i as CellOwner;
-        closest.units = 6;
-
-        // Give 1 neighbor along the flanking path
-        const neighbors = getNeighbors(closest);
-        for (const n of neighbors) {
-          const nCell = cells.find(c => c.q === n.q && c.r === n.r);
-          if (nCell && nCell.owner === -1) {
-            nCell.owner = i as CellOwner;
-            nCell.units = 4;
-            break;
-          }
-        }
+        closest.units = 1; // Exactly 1 tile with 1 unit
       }
     }
   } else {
-    // Standard random placement with minimum distance separation
+    // Standard placement: exactly 1 owned tile with 1 unit per faction
     const available = [...cells].sort(() => Math.random() - 0.5);
     const chosen: HexCell[] = [];
 
@@ -253,18 +253,7 @@ export function generateBoardCells(
       if (bestCandidate) {
         chosen.push(bestCandidate);
         bestCandidate.owner = p as CellOwner;
-        bestCandidate.units = 6;
-
-        // Give 1 adjacent node
-        const neighbors = getNeighbors(bestCandidate);
-        for (const n of neighbors) {
-          const nCell = cells.find(c => c.q === n.q && c.r === n.r);
-          if (nCell && nCell.owner === -1) {
-            nCell.owner = p as CellOwner;
-            nCell.units = 4;
-            break;
-          }
-        }
+        bestCandidate.units = 1; // Exactly 1 tile with 1 unit
       }
     }
   }

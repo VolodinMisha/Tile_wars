@@ -10,6 +10,8 @@ export type BotDifficulty = 'easy' | 'medium' | 'hard' | 'pro';
 
 export type GameType = 'campaign' | 'custom';
 
+export type TurnPhase = 'attack' | 'reinforce';
+
 export interface CampaignLevel {
   level: number;
   nameEn: string;

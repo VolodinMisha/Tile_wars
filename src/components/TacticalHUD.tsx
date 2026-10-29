@@ -6,6 +6,7 @@ import {
   CellOwner,
   GameLogEntry,
   GameSettings,
+  TurnPhase,
 } from '../game/types';
 import { t } from '../game/i18n';
 import { PLAYERS_INFO, getPlayerColor } from '../game/constants';
@@ -17,11 +18,14 @@ interface TacticalHUDProps {
   turn: number;
   activePlayer: CellOwner;
   isHumanTurn: boolean;
+  turnPhase: TurnPhase;
   cells: HexCell[];
   selectedCell: HexCell | null;
   overclockActive: boolean;
   reinforcementPool: number;
   onToggleOverclock: () => void;
+  onFinishAttacks: () => void;
+  onAutoDeployReinforcements: () => void;
   onEndTurn: () => void;
   onDeselect: () => void;
   onReinforceCell: (cell: HexCell) => void;
@@ -39,11 +43,14 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
   turn,
   activePlayer,
   isHumanTurn,
+  turnPhase,
   cells,
   selectedCell,
   overclockActive,
   reinforcementPool,
   onToggleOverclock,
+  onFinishAttacks,
+  onAutoDeployReinforcements,
   onEndTurn,
   onDeselect,
   onReinforceCell,
@@ -113,9 +120,23 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
               <span className="font-bold hidden sm:inline" style={{ color: activeColor }}>
                 {activePlayerName}
               </span>
-              <span className="text-[11px] opacity-75">
-                {isHumanTurn ? `[${t(lang, 'hud_your_turn')}]` : `[${t(lang, 'hud_enemy_turn')}]`}
-              </span>
+              {isHumanTurn ? (
+                <span
+                  className={`text-[11px] font-bold px-2 py-0.5 border ${
+                    turnPhase === 'attack'
+                      ? 'border-amber-400 bg-amber-500/20 text-amber-300'
+                      : 'border-emerald-400 bg-emerald-500/20 text-emerald-300 animate-pulse'
+                  }`}
+                >
+                  {turnPhase === 'attack'
+                    ? t(lang, 'hud_phase_attack')
+                    : t(lang, 'hud_phase_reinforce')}
+                </span>
+              ) : (
+                <span className="text-[11px] opacity-75">
+                  [{t(lang, 'hud_enemy_turn')}]
+                </span>
+              )}
             </div>
           </div>
 
@@ -303,44 +324,72 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
                 </>
               ) : (
                 <span className="text-[11px] opacity-75">
-                  {reinforcementPool > 0
-                    ? t(lang, 'hud_reinforce_cta')
-                    : t(lang, 'hud_pan_zoom_hint')}
+                  {turnPhase === 'reinforce'
+                    ? t(lang, 'hud_reinforce_hint')
+                    : t(lang, 'hud_attack_hint')}
                 </span>
               )}
             </div>
 
-            {/* Overclock & End Turn Buttons */}
+            {/* Turn Phase Action Controls */}
             <div className="flex items-center gap-2 font-mono">
-              {/* Overclock toggle switch */}
-              <button
-                type="button"
-                onClick={onToggleOverclock}
-                className={`px-2.5 py-1.5 border text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 ${
-                  overclockActive
-                    ? 'border-amber-500 bg-amber-500/20 text-amber-400 animate-pulse'
-                    : `${borderCol} opacity-80 hover:opacity-100`
-                }`}
-              >
-                <span>{overclockActive ? '[*]' : '[ ]'}</span>
-                <span>{overclockActive ? t(lang, 'hud_overclock_active') : t(lang, 'hud_overclock_inactive')}</span>
-              </button>
+              {/* Overclock toggle switch - active during attack phase */}
+              {turnPhase === 'attack' && (
+                <button
+                  type="button"
+                  onClick={onToggleOverclock}
+                  className={`px-2.5 py-1.5 border text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 ${
+                    overclockActive
+                      ? 'border-amber-500 bg-amber-500/20 text-amber-400 animate-pulse'
+                      : `${borderCol} opacity-80 hover:opacity-100`
+                  }`}
+                >
+                  <span>{overclockActive ? '[*]' : '[ ]'}</span>
+                  <span>{overclockActive ? t(lang, 'hud_overclock_active') : t(lang, 'hud_overclock_inactive')}</span>
+                </button>
+              )}
 
-              {/* End Turn Button */}
-              <button
-                type="button"
-                disabled={!isHumanTurn || gameState !== 'in_progress'}
-                onClick={onEndTurn}
-                className={`px-4 py-2 border-2 text-xs font-bold cursor-pointer transition-colors ${
-                  isHumanTurn && gameState === 'in_progress'
-                    ? isDark
-                      ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                      : 'border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700'
-                    : 'border-zinc-500 opacity-40 cursor-not-allowed'
-                }`}
-              >
-                {t(lang, 'hud_end_turn')}
-              </button>
+              {/* Phase 1: Finish Attacks Button OR Phase 2: Reinforcement Counter Badge */}
+              {isHumanTurn && gameState === 'in_progress' ? (
+                turnPhase === 'attack' ? (
+                  <button
+                    type="button"
+                    onClick={onFinishAttacks}
+                    className={`px-4 py-2 border-2 text-xs font-bold cursor-pointer transition-colors flex items-center gap-2 ${
+                      isDark
+                        ? 'border-amber-400 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
+                        : 'border-amber-700 bg-amber-500 text-black hover:bg-amber-600'
+                    }`}
+                  >
+                    <span>[ {t(lang, 'hud_finish_attacks')} ]</span>
+                    <span>&gt;&gt;</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onAutoDeployReinforcements}
+                    className={`px-4 py-2 border-2 text-xs font-bold cursor-pointer transition-all animate-pulse flex items-center gap-2 ${
+                      isDark
+                        ? 'border-emerald-400 bg-emerald-500/30 text-emerald-200 hover:bg-emerald-500/40 shadow-[0_0_15px_rgba(52,211,153,0.3)]'
+                        : 'border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700 shadow-md'
+                    }`}
+                    title={t(lang, 'hud_reinforce_hint')}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
+                    <span>
+                      {t(lang, 'hud_deploy_reinforcements').replace('{count}', String(reinforcementPool))}
+                    </span>
+                  </button>
+                )
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="px-4 py-2 border-2 border-zinc-500 text-xs font-bold opacity-40 cursor-not-allowed"
+                >
+                  {t(lang, 'hud_enemy_turn')}
+                </button>
+              )}
             </div>
           </div>
 

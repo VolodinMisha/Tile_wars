@@ -205,6 +205,59 @@ export function distributeReinforcements(cells: HexCell[], owner: CellOwner): nu
 }
 
 /**
+ * Identifies frontline tiles owned by a player (tiles adjacent to at least one enemy or neutral tile).
+ */
+export function getFrontlineCells(cells: HexCell[], owner: CellOwner): HexCell[] {
+  const owned = cells.filter(c => c.owner === owner && c.burnedOutTurns <= 0);
+  if (owned.length === 0) return [];
+
+  const frontlines = owned.filter(cell => {
+    const neighbors = getNeighbors(cell);
+    return cells.some(
+      other => neighbors.some(n => n.q === other.q && n.r === other.r) && other.owner !== owner
+    );
+  });
+
+  return frontlines.length > 0 ? frontlines : owned;
+}
+
+/**
+ * Automatically and evenly distributes available reinforcement points along frontline tiles.
+ */
+export function distributeFrontlineReinforcements(
+  cells: HexCell[],
+  owner: CellOwner,
+  pool: number
+): number {
+  if (pool <= 0) return 0;
+  const frontlines = getFrontlineCells(cells, owner);
+  if (frontlines.length === 0) return 0;
+
+  let remaining = pool;
+  let placed = 0;
+
+  while (remaining > 0) {
+    // Sort ascending by units so weakest frontline positions are strengthened first
+    frontlines.sort((a, b) => a.units - b.units);
+    let placedInPass = false;
+
+    for (const cell of frontlines) {
+      if (remaining <= 0) break;
+      if (cell.units < MAX_CELL_UNITS) {
+        cell.units += 1;
+        remaining -= 1;
+        placed += 1;
+        placedInPass = true;
+      }
+    }
+
+    if (!placedInPass) break;
+  }
+
+  return placed;
+}
+
+/**
  * Updates EM storms and cell burnout counters on round completion
  */
 export function tickRoundHazards(

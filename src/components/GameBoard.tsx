@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { HexCell, Theme, CellOwner, HexCoord } from '../game/types';
+import { HexCell, Theme, CellOwner, HexCoord, TurnPhase } from '../game/types';
 import {
   hexToPixel,
   getHexPolygonPoints,
@@ -18,6 +18,7 @@ interface GameBoardProps {
   theme: Theme;
   fogOfWarEnabled: boolean;
   isHumanTurn: boolean;
+  turnPhase: TurnPhase;
   overclockActive: boolean;
   reinforcementPool: number;
   resetTrigger: number; // Increment to reset camera view
@@ -32,6 +33,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   theme,
   fogOfWarEnabled,
   isHumanTurn,
+  turnPhase,
   overclockActive,
   reinforcementPool,
   resetTrigger,
@@ -60,9 +62,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
 
-  // Target options for the selected cell (Strictly enemy or neutral; friendly transfer is removed)
+  // Target options for the selected cell (Strictly enemy or neutral; only active during attack phase)
   const targetOptions = useMemo(() => {
-    if (!selectedCell || !isHumanTurn || selectedCell.units <= 1) return [];
+    if (!selectedCell || !isHumanTurn || turnPhase !== 'attack' || selectedCell.units <= 1) return [];
 
     return cells
       .filter(target => areHexesAdjacent(selectedCell, target) && target.owner !== selectedCell.owner)
@@ -80,7 +82,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           angle,
         };
       });
-  }, [selectedCell, cells, isHumanTurn]);
+  }, [selectedCell, cells, isHumanTurn, turnPhase]);
 
   // Center camera on grid - only when initial mount or resetTrigger (RESET CAM button) is pressed
   const centerCamera = useCallback(() => {
