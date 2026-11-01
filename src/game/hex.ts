@@ -188,12 +188,17 @@ export function generateBoardCells(
       units = Math.random() < 0.7 ? 2 : 3;
     }
 
+    // Capacity variety: Central hubs and strategic nexus nodes have capacity 12 (strongholds); standard cells have capacity 8
+    const isFortifiedStronghold = dist <= 1 || (c.q === 0 && c.r === 0);
+    const maxUnits = isFortifiedStronghold ? 12 : 8;
+
     return {
       id: `${c.q}_${c.r}`,
       q: c.q,
       r: c.r,
       owner: -1,
       units,
+      maxUnits,
       stormActive: false,
       stormTurnsRemaining: 0,
       burnedOutTurns: 0,
@@ -236,6 +241,7 @@ export function generateBoardCells(
         anchorCoords.push({ q: closest.q, r: closest.r });
         closest.owner = i as CellOwner;
         closest.units = 1; // Exactly 1 tile with 1 unit
+        closest.maxUnits = 12; // Starter base has full 12 capacity
       }
     }
   } else {
@@ -254,6 +260,7 @@ export function generateBoardCells(
         chosen.push(bestCandidate);
         bestCandidate.owner = p as CellOwner;
         bestCandidate.units = 1; // Exactly 1 tile with 1 unit
+        bestCandidate.maxUnits = 12; // Starter base has full 12 capacity
       }
     }
   }

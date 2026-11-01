@@ -1,9 +1,18 @@
-import { HexCell, CombatResult, CellOwner, HexCoord } from './types';
+import { HexCell, CombatResult, CellOwner, HexCoord, BotDifficulty } from './types';
 import { areHexesAdjacent, getNeighbors } from './hex';
 
 export const MAX_CELL_UNITS = 12;
+export const STANDARD_CELL_CAPACITY = 8;
+export const FORTIFIED_CELL_CAPACITY = 12;
 export const BURNOUT_PENALTY_TURNS = 2;
 export const STORM_DURATION_TURNS = 3;
+
+/**
+ * Gets the maximum unit capacity for a specific hex cell (8 for standard, 12 for strongholds)
+ */
+export function getCellMaxUnits(cell?: HexCell | null): number {
+  return cell?.maxUnits ?? MAX_CELL_UNITS;
+}
 
 /**
  * Resolves combat using direct subtraction combat rules between attacker and defender.
@@ -18,7 +27,8 @@ export function resolveCombat(
   attackerUnits: number,
   defenderUnits: number,
   overclock: boolean,
-  deterministicSeed?: number
+  deterministicSeed?: number,
+  targetMaxUnits: number = MAX_CELL_UNITS
 ): CombatResult {
   const committedUnits = attackerUnits;
 
@@ -52,8 +62,8 @@ export function resolveCombat(
   if (success) {
     // Attacker captures target! Defender is eliminated.
     const defenderLosses = defenderUnits;
-    // Direct subtraction: surviving units occupy target (minimum 1, capped at MAX_CELL_UNITS)
-    const survivingUnits = Math.min(MAX_CELL_UNITS, Math.max(1, effectiveAttackPower - defenderUnits));
+    // Direct subtraction: surviving units occupy target (minimum 1, capped at target tile's max capacity)
+    const survivingUnits = Math.min(targetMaxUnits, Math.max(1, effectiveAttackPower - defenderUnits));
     const attackerLosses = Math.min(attackerUnits - 1, defenderUnits);
 
     return {
@@ -147,7 +157,8 @@ export function canReinforceCell(
   if (cell.owner !== owner) {
     return { valid: false, reason: 'not_owner' };
   }
-  if (cell.units >= MAX_CELL_UNITS) {
+  const max = getCellMaxUnits(cell);
+  if (cell.units >= max) {
     return { valid: false, reason: 'cell_maxed' };
   }
   if (cell.burnedOutTurns > 0) {
@@ -173,32 +184,168 @@ export function applyManualReinforcement(
 }
 
 /**
+ * Applies maximum possible reinforcements up to available pool and cell capacity (Hold-to-Max QoL)
+ */
+export function applyMaxManualReinforcement(
+  cell: HexCell,
+  owner: CellOwner,
+  pool: number
+): { success: boolean; added: number; newPool: number } {
+  const check = canReinforceCell(cell, owner, pool);
+  if (!check.valid) {
+    return { success: false, added: 0, newPool: pool };
+  }
+  const max = getCellMaxUnits(cell);
+  const needed = Math.max(0, max - cell.units);
+  const toAdd = Math.min(needed, pool);
+  if (toAdd <= 0) {
+    return { success: false, added: 0, newPool: pool };
+  }
+  cell.units += toAdd;
+  return { success: true, added: toAdd, newPool: pool - toAdd };
+}
+
+/**
  * Calculates reinforcement points generated for the turn equal to the exact number of cells/hexes owned
  */
 export function calculateReinforcements(controlledCount: number): number {
   return Math.max(1, controlledCount);
 }
 
-export function distributeReinforcements(cells: HexCell[], owner: CellOwner): number {
+/**
+ * Difficulty-aware bot reinforcement distribution:
+ * - Easy: Frequently reinforces evenly/weakest-first across all owned cells (turtle behavior).
+ * - Medium: Occasionally concentrates heavily into 1 or 2 random cells (creating high stacks that trigger chain attacks).
+ * - Hard: Focuses on defensive perimeter: analyzes surrounding threats and reinforces border tiles facing enemy forces.
+ * - Pro: Zero waste on isolated inner cells! Prioritizes frontline border tiles facing the strongest opponent and high-capacity (12) breakthrough launchpads.
+ */
+export function distributeReinforcements(
+  cells: HexCell[],
+  owner: CellOwner,
+  difficulty: BotDifficulty = 'medium'
+): number {
   const owned = cells.filter(c => c.owner === owner && c.burnedOutTurns <= 0);
   if (owned.length === 0) return 0;
 
   const totalBonus = calculateReinforcements(owned.length);
   let remaining = totalBonus;
 
-  // Sort by lowest units first to reinforce weak points, while capping at MAX_CELL_UNITS
-  owned.sort((a, b) => a.units - b.units);
+  if (difficulty === 'easy') {
+    // Easy: Turtling - reinforces lowest-unit cells evenly
+    owned.sort((a, b) => a.units - b.units);
+    while (remaining > 0) {
+      let placedAny = false;
+      for (const cell of owned) {
+        const max = getCellMaxUnits(cell);
+        if (cell.units < max && remaining > 0) {
+          cell.units += 1;
+          remaining -= 1;
+          placedAny = true;
+        }
+      }
+      if (!placedAny) break;
+    }
+  } else if (difficulty === 'medium') {
+    // Medium: Concentrates into 1 or 2 focal points to build large armies that will chain-attack
+    const focusCells = [...owned].sort(() => Math.random() - 0.5).slice(0, Math.min(2, owned.length));
+    for (const cell of focusCells) {
+      const max = getCellMaxUnits(cell);
+      const space = Math.max(0, max - cell.units);
+      const add = Math.min(space, remaining);
+      cell.units += add;
+      remaining -= add;
+      if (remaining <= 0) break;
+    }
+    // Any remaining distributed to weakest
+    owned.sort((a, b) => a.units - b.units);
+    while (remaining > 0) {
+      let placedAny = false;
+      for (const cell of owned) {
+        const max = getCellMaxUnits(cell);
+        if (cell.units < max && remaining > 0) {
+          cell.units += 1;
+          remaining -= 1;
+          placedAny = true;
+        }
+      }
+      if (!placedAny) break;
+    }
+  } else if (difficulty === 'hard') {
+    // Hard: Reinforced defensive perimeter facing enemy threats
+    const frontlines = getFrontlineCells(cells, owner);
+    const targetPool = frontlines.length > 0 ? frontlines : owned;
 
-  while (remaining > 0) {
-    let placedAny = false;
-    for (const cell of owned) {
-      if (cell.units < MAX_CELL_UNITS && remaining > 0) {
-        cell.units += 1;
-        remaining -= 1;
-        placedAny = true;
+    // Score frontlines by threat level (sum of adjacent enemy/neutral units)
+    const threatScore = (c: HexCell) => {
+      const neighbors = getNeighbors(c);
+      return cells
+        .filter(other => neighbors.some(n => n.q === other.q && n.r === other.r) && other.owner !== owner)
+        .reduce((sum, other) => sum + other.units, 0);
+    };
+
+    targetPool.sort((a, b) => threatScore(b) - threatScore(a) || a.units - b.units);
+
+    while (remaining > 0) {
+      let placedAny = false;
+      for (const cell of targetPool) {
+        const max = getCellMaxUnits(cell);
+        if (cell.units < max && remaining > 0) {
+          cell.units += 1;
+          remaining -= 1;
+          placedAny = true;
+        }
+      }
+      if (!placedAny) break;
+    }
+  } else if (difficulty === 'pro') {
+    // Pro: Never waste reinforcements on isolated inner cells!
+    // Prioritize 12-capacity tiles on the frontline for major breakthroughs, and border tiles facing strongest faction
+    const frontlines = getFrontlineCells(cells, owner);
+    const targetPool = frontlines.length > 0 ? frontlines : owned;
+
+    // Identify strongest enemy faction
+    const factionUnits = new Map<CellOwner, number>();
+    cells.forEach(c => {
+      if (c.owner !== owner && c.owner !== -1) {
+        factionUnits.set(c.owner, (factionUnits.get(c.owner) || 0) + c.units);
+      }
+    });
+    let strongestEnemy: CellOwner | null = null;
+    let maxEnemyUnits = -1;
+    for (const [foe, u] of factionUnits.entries()) {
+      if (u > maxEnemyUnits) {
+        maxEnemyUnits = u;
+        strongestEnemy = foe;
       }
     }
-    if (!placedAny) break; // All cells maxed out
+
+    const proScore = (c: HexCell) => {
+      let score = 0;
+      // High-capacity (12) tiles get immense priority to serve as breakthrough siege engines
+      if (getCellMaxUnits(c) >= 12) score += 30;
+      // Tiles bordering strongest enemy get higher defense & offensive readiness
+      const neighbors = getNeighbors(c);
+      const bordersStrongest = cells.some(
+        other => neighbors.some(n => n.q === other.q && n.r === other.r) && other.owner === strongestEnemy
+      );
+      if (bordersStrongest) score += 20;
+      return score;
+    };
+
+    targetPool.sort((a, b) => proScore(b) - proScore(a) || a.units - b.units);
+
+    while (remaining > 0) {
+      let placedAny = false;
+      for (const cell of targetPool) {
+        const max = getCellMaxUnits(cell);
+        if (cell.units < max && remaining > 0) {
+          cell.units += 1;
+          remaining -= 1;
+          placedAny = true;
+        }
+      }
+      if (!placedAny) break;
+    }
   }
 
   return totalBonus;
@@ -243,7 +390,8 @@ export function distributeFrontlineReinforcements(
 
     for (const cell of frontlines) {
       if (remaining <= 0) break;
-      if (cell.units < MAX_CELL_UNITS) {
+      const max = getCellMaxUnits(cell);
+      if (cell.units < max) {
         cell.units += 1;
         remaining -= 1;
         placed += 1;
@@ -258,6 +406,26 @@ export function distributeFrontlineReinforcements(
 }
 
 /**
+ * Ensures EM storm never blocks the final target tile on the map.
+ * If 1 or fewer non-player cells remain, all active storms on them are instantly cleared.
+ */
+export function liftStormIfLastTarget(cells: HexCell[]): boolean {
+  const nonPlayerCells = cells.filter(c => c.owner !== 0);
+  if (nonPlayerCells.length <= 1) {
+    let lifted = false;
+    nonPlayerCells.forEach(c => {
+      if (c.stormActive) {
+        c.stormActive = false;
+        c.stormTurnsRemaining = 0;
+        lifted = true;
+      }
+    });
+    return lifted;
+  }
+  return false;
+}
+
+/**
  * Updates EM storms and cell burnout counters on round completion
  */
 export function tickRoundHazards(
@@ -266,6 +434,11 @@ export function tickRoundHazards(
   shouldSpawnStorm: boolean
 ): { spawnedStormCoord?: HexCoord; clearedCount: number } {
   let clearedCount = 0;
+
+  // Lift any storm blocking the final enemy/neutral tile immediately
+  if (liftStormIfLastTarget(cells)) {
+    clearedCount++;
+  }
 
   // Decrement burnouts and storms
   cells.forEach(c => {
@@ -281,10 +454,22 @@ export function tickRoundHazards(
     }
   });
 
+  // Re-check after decrement
+  liftStormIfLastTarget(cells);
+
   // Spawn new storm hazard periodically if requested
   let spawnedStormCoord: HexCoord | undefined;
-  if (shouldSpawnStorm) {
-    const candidates = cells.filter(c => !c.stormActive && c.units <= 8);
+  const nonPlayerCells = cells.filter(c => c.owner !== 0);
+
+  // Do not spawn a storm if only 1 non-player cell remains (never block win condition)
+  if (shouldSpawnStorm && nonPlayerCells.length > 1) {
+    // Filter out the last enemy cell if non-player cell count is low
+    const candidates = cells.filter(c => {
+      if (c.stormActive || c.units > 8) return false;
+      if (nonPlayerCells.length <= 2 && c.owner !== 0) return false;
+      return true;
+    });
+
     if (candidates.length > 0) {
       const chosen = candidates[Math.floor(Math.random() * candidates.length)];
       chosen.stormActive = true;

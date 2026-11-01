@@ -11,7 +11,7 @@ import {
 import { t } from '../game/i18n';
 import { PLAYERS_INFO, getPlayerColor } from '../game/constants';
 import { soundFx } from '../game/audio';
-import { MAX_CELL_UNITS, canReinforceCell } from '../game/rules';
+import { MAX_CELL_UNITS, canReinforceCell, getCellMaxUnits } from '../game/rules';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface TacticalHUDProps {
@@ -29,6 +29,7 @@ interface TacticalHUDProps {
   onEndTurn: () => void;
   onDeselect: () => void;
   onReinforceCell: (cell: HexCell) => void;
+  onMaxReinforceCell?: (cell: HexCell) => void;
   onResetCamera: () => void;
   onAbortToMenu: () => void;
   settings: GameSettings;
@@ -54,6 +55,7 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
   onEndTurn,
   onDeselect,
   onReinforceCell,
+  onMaxReinforceCell,
   onResetCamera,
   onAbortToMenu,
   settings,
@@ -186,14 +188,16 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
             <span className="font-bold opacity-80">{t(lang, 'hud_reinforcements')}:</span>
             <span
               className={`font-bold px-2 py-0.5 border ${
-                reinforcementPool > 0
+                turnPhase === 'reinforce' && reinforcementPool > 0
                   ? isDark
                     ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300 animate-pulse'
                     : 'border-emerald-700 bg-emerald-100 text-emerald-800'
-                  : 'border-current/40 opacity-60'
+                  : 'border-current/40 opacity-75'
               }`}
             >
-              {reinforcementPool} PTS {reinforcementPool > 0 ? `(${reinforcementPool} NODES)` : '[DEPLOYED]'}
+              {turnPhase === 'attack'
+                ? `+${humanCells.length} PTS (${humanCells.length} NODES) [PHASE 1]`
+                : `${reinforcementPool} PTS ${reinforcementPool > 0 ? `(${reinforcementPool} NODES)` : '[DEPLOYED]'}`}
             </span>
           </div>
 
@@ -286,26 +290,55 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
             <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
               {selectedCell ? (
                 <>
-                  <span className="font-bold border border-current px-2 py-1">
-                    SECTOR [{selectedCell.q},{selectedCell.r}] • GARRISON: {selectedCell.units}
+                  <span className="font-bold border border-current px-2 py-1 flex items-center gap-1.5">
+                    <span>
+                      SECTOR [{selectedCell.q},{selectedCell.r}] • GARRISON: {selectedCell.units}/{getCellMaxUnits(selectedCell)}
+                    </span>
+                    <span className={`text-[10px] px-1 py-0.2 border ${
+                      getCellMaxUnits(selectedCell) === 12
+                        ? 'border-amber-400 text-amber-300'
+                        : 'border-current/40 opacity-75'
+                    }`}>
+                      {getCellMaxUnits(selectedCell) === 12 ? '★ FORT:12' : 'CAP:8'}
+                    </span>
                   </span>
 
-                  {/* Manual Reinforce button for selected cell */}
+                  {/* Manual Reinforce buttons (+1 and +MAX) for selected cell */}
                   {selectedCell.owner === 0 && (
-                    <button
-                      type="button"
-                      disabled={!canReinforceSelected}
-                      onClick={() => onReinforceCell(selectedCell)}
-                      className={`px-2.5 py-1 border font-bold cursor-pointer transition-colors ${
-                        canReinforceSelected
-                          ? isDark
-                            ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                            : 'border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700'
-                          : 'border-zinc-600 opacity-40 cursor-not-allowed'
-                      }`}
-                    >
-                      +1 REINFORCE ({reinforcementPool} PTS)
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={!canReinforceSelected}
+                        onClick={() => onReinforceCell(selectedCell)}
+                        className={`px-2.5 py-1 border font-bold cursor-pointer transition-colors ${
+                          canReinforceSelected
+                            ? isDark
+                              ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                              : 'border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700'
+                            : 'border-zinc-600 opacity-40 cursor-not-allowed'
+                        }`}
+                      >
+                        +1 REINFORCE ({reinforcementPool} PTS)
+                      </button>
+
+                      {onMaxReinforceCell && (
+                        <button
+                          type="button"
+                          disabled={!canReinforceSelected}
+                          onClick={() => onMaxReinforceCell(selectedCell)}
+                          className={`px-2 py-1 border font-bold cursor-pointer transition-colors ${
+                            canReinforceSelected
+                              ? isDark
+                                ? 'border-emerald-400 bg-emerald-500/30 text-emerald-200 hover:bg-emerald-500/50 shadow-sm'
+                                : 'border-emerald-800 bg-emerald-700 text-white hover:bg-emerald-800'
+                              : 'border-zinc-600 opacity-40 cursor-not-allowed'
+                          }`}
+                          title="Fill sector to max capacity"
+                        >
+                          +MAX
+                        </button>
+                      )}
+                    </div>
                   )}
 
                   {selectedCell.burnedOutTurns > 0 && (
@@ -364,7 +397,7 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
                     <span>[ {t(lang, 'hud_finish_attacks')} ]</span>
                     <span>&gt;&gt;</span>
                   </button>
-                ) : (
+                ) : reinforcementPool > 0 ? (
                   <button
                     type="button"
                     onClick={onAutoDeployReinforcements}
@@ -379,6 +412,19 @@ export const TacticalHUD: React.FC<TacticalHUDProps> = ({
                     <span>
                       {t(lang, 'hud_deploy_reinforcements').replace('{count}', String(reinforcementPool))}
                     </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onEndTurn}
+                    className={`px-4 py-2 border-2 text-xs font-bold cursor-pointer transition-colors flex items-center gap-2 ${
+                      isDark
+                        ? 'border-zinc-400 bg-zinc-700/40 text-zinc-200 hover:bg-zinc-700/60'
+                        : 'border-zinc-700 bg-zinc-300 text-black hover:bg-zinc-400'
+                    }`}
+                  >
+                    <span>[ {t(lang, 'hud_end_turn')} ]</span>
+                    <span>&gt;&gt;</span>
                   </button>
                 )
               ) : (

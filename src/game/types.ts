@@ -58,6 +58,7 @@ export interface HexCell {
   r: number;
   owner: CellOwner;
   units: number;
+  maxUnits?: number; // 8 for standard tactical nodes, 12 for fortified/high-capacity strongholds
   stormActive: boolean;
   stormTurnsRemaining: number;
   burnedOutTurns: number; // >0 means no unit production due to failed overclock

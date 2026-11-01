@@ -419,15 +419,22 @@ for (let lvl = 11; lvl <= 20; lvl++) {
  */
 export function getStaticCampaignMap(level: number): HexCell[] {
   const defs = CAMPAIGN_STATIC_MAPS[level] || CAMPAIGN_STATIC_MAPS[1];
-  return defs.map(d => ({
-    id: `${d.q}_${d.r}`,
-    q: d.q,
-    r: d.r,
-    owner: d.owner,
-    units: d.units,
-    stormActive: !!d.stormActive,
-    stormTurnsRemaining: d.stormActive ? 3 : 0,
-    burnedOutTurns: 0,
-    revealed: d.owner === 0,
-  }));
+  return defs.map(d => {
+    // Key positions, bases, or high-garrison central watchtowers have 12 capacity; secondary corridors have 8 capacity
+    const isFortified = d.owner >= 0 || d.units >= 4 || (d.q === 0 && d.r === 0);
+    const maxUnits = isFortified ? 12 : 8;
+
+    return {
+      id: `${d.q}_${d.r}`,
+      q: d.q,
+      r: d.r,
+      owner: d.owner,
+      units: d.units,
+      maxUnits,
+      stormActive: !!d.stormActive,
+      stormTurnsRemaining: d.stormActive ? 3 : 0,
+      burnedOutTurns: 0,
+      revealed: d.owner === 0,
+    };
+  });
 }

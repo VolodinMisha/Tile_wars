@@ -6,12 +6,20 @@ import {
   validateMove,
   calculateReinforcements,
   distributeReinforcements,
+  getFrontlineCells,
+  distributeFrontlineReinforcements,
   checkGameState,
   checkAndExecuteEmergencyTransfer,
   canReinforceCell,
   applyManualReinforcement,
+  applyMaxManualReinforcement,
+  getCellMaxUnits,
+  STANDARD_CELL_CAPACITY,
+  FORTIFIED_CELL_CAPACITY,
+  liftStormIfLastTarget,
   MAX_CELL_UNITS,
 } from './rules';
+import { computeBotMoves } from './bot';
 import { getStaticCampaignMap, CAMPAIGN_LEVELS } from './campaign';
 import { HexCell } from './types';
 
@@ -309,3 +317,196 @@ test('campaign: all 20 campaign missions feature static handcrafted maps and con
     assert.ok(levelDef.briefingUa.length > 20, `Level ${lvl} UA briefing must be descriptive`);
   }
 });
+
+test('phase 2 frontline reinforcements: identifies frontlines and distributes points evenly', () => {
+  // Setup: player has 2 cells: (0,0) with 2 units (adjacent to enemy at 1,0), and (-1,0) with 3 units (interior)
+  const cellFrontline: HexCell = {
+    id: '0_0',
+    q: 0,
+    r: 0,
+    owner: 0,
+    units: 2,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+  const cellInterior: HexCell = {
+    id: '-2_0',
+    q: -2,
+    r: 0,
+    owner: 0,
+    units: 3,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+  const cellEnemy: HexCell = {
+    id: '1_0',
+    q: 1,
+    r: 0,
+    owner: 1,
+    units: 4,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+
+  const cells = [cellFrontline, cellInterior, cellEnemy];
+
+  // getFrontlineCells
+  const frontlines = getFrontlineCells(cells, 0);
+  assert.equal(frontlines.length, 1);
+  assert.equal(frontlines[0].id, '0_0');
+
+  // distributeFrontlineReinforcements: 2 points distributed to frontline cell
+  const distributed = distributeFrontlineReinforcements(cells, 0, 2);
+  assert.equal(distributed, 2);
+  assert.equal(cellFrontline.units, 4); // 2 + 2 = 4
+  assert.equal(cellInterior.units, 3); // Interior cell unchanged
+});
+
+test('cell capacity: 8 vs 12 limits, combat capping, and applyMaxManualReinforcement', () => {
+  assert.equal(STANDARD_CELL_CAPACITY, 8);
+  assert.equal(FORTIFIED_CELL_CAPACITY, 12);
+
+  const cellStd: HexCell = {
+    id: '0_0',
+    q: 0,
+    r: 0,
+    owner: 0,
+    units: 5,
+    maxUnits: 8,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+
+  const cellFort: HexCell = {
+    id: '1_0',
+    q: 1,
+    r: 0,
+    owner: 0,
+    units: 5,
+    maxUnits: 12,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+
+  assert.equal(getCellMaxUnits(cellStd), 8);
+  assert.equal(getCellMaxUnits(cellFort), 12);
+
+  // Max manual reinforcement test
+  // Pool has 10 points. cellStd needs 3 to reach 8.
+  const appliedStd = applyMaxManualReinforcement(cellStd, 0, 10);
+  assert.equal(appliedStd.added, 3);
+  assert.equal(appliedStd.newPool, 7);
+  assert.equal(cellStd.units, 8);
+
+  // cellFort needs 7 to reach 12. Pool has 7 points.
+  const appliedFort = applyMaxManualReinforcement(cellFort, 0, 7);
+  assert.equal(appliedFort.added, 7);
+  assert.equal(appliedFort.newPool, 0);
+  assert.equal(cellFort.units, 12);
+
+  // Combat victory capping at cell target max units:
+  // Attacker 12 units vs defender 1 unit. Surviving = 11 units.
+  // If target maxUnits is 8, surviving defender garrison must cap at 8.
+  const combatResultStd = resolveCombat(12, 1, false, 0.5, 8);
+  assert.equal(combatResultStd.captured, true);
+  assert.equal(combatResultStd.defenderUnitsRemaining, 8); // Capped at target max 8!
+
+  const combatResultFort = resolveCombat(14, 1, false, 0.5, 12);
+  assert.equal(combatResultFort.captured, true);
+  assert.equal(combatResultFort.defenderUnitsRemaining, 12); // Capped at target max 12!
+});
+
+test('em storm: liftStormIfLastTarget lifts storms when non-player cells <= 1', () => {
+  const cellPlayer: HexCell = {
+    id: '0_0',
+    q: 0,
+    r: 0,
+    owner: 0,
+    units: 5,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+
+  const cellLastEnemy: HexCell = {
+    id: '1_0',
+    q: 1,
+    r: 0,
+    owner: 1,
+    units: 3,
+    stormActive: true,
+    stormTurnsRemaining: 3,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+
+  // Only 1 non-player cell in the entire map
+  const lifted = liftStormIfLastTarget([cellPlayer, cellLastEnemy]);
+  assert.equal(lifted, true);
+  assert.equal(cellLastEnemy.stormActive, false);
+  assert.equal(cellLastEnemy.stormTurnsRemaining, 0);
+
+  // When multiple non-player cells exist, storm is NOT lifted early
+  const cellNeutral: HexCell = {
+    id: '2_0',
+    q: 2,
+    r: 0,
+    owner: -1,
+    units: 1,
+    stormActive: true,
+    stormTurnsRemaining: 2,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+  cellLastEnemy.stormActive = true;
+  cellLastEnemy.stormTurnsRemaining = 2;
+
+  const notLifted = liftStormIfLastTarget([cellPlayer, cellLastEnemy, cellNeutral]);
+  assert.equal(notLifted, false);
+  assert.equal(cellLastEnemy.stormActive, true);
+});
+
+test('bot logic: easy bot never targets human player (owner 0)', () => {
+  const easyBotCell: HexCell = {
+    id: '0_0',
+    q: 0,
+    r: 0,
+    owner: 1,
+    units: 6,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+  const humanCell: HexCell = {
+    id: '1_0',
+    q: 1,
+    r: 0,
+    owner: 0,
+    units: 2,
+    stormActive: false,
+    stormTurnsRemaining: 0,
+    burnedOutTurns: 0,
+    revealed: true,
+  };
+
+  // Easy bot should NEVER target the human player
+  const moves = computeBotMoves([easyBotCell, humanCell], 1, 'easy');
+  for (const move of moves) {
+    const target = [easyBotCell, humanCell].find(c => c.id === move.targetId);
+    assert.notEqual(target?.owner, 0, 'Easy bot should completely ignore human player');
+  }
+});
+
+

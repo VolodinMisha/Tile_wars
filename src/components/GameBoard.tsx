@@ -4,10 +4,11 @@ import {
   hexToPixel,
   getHexPolygonPoints,
   areHexesAdjacent,
+  getNeighbors,
 } from '../game/hex';
 import { getPlayerColor, getPlayerBg } from '../game/constants';
 import { soundFx } from '../game/audio';
-import { MAX_CELL_UNITS, canReinforceCell } from '../game/rules';
+import { MAX_CELL_UNITS, canReinforceCell, getCellMaxUnits } from '../game/rules';
 
 interface GameBoardProps {
   cells: HexCell[];
@@ -15,6 +16,7 @@ interface GameBoardProps {
   onSelectCell: (cell: HexCell | null) => void;
   onExecuteAction: (targetCell: HexCell) => void;
   onReinforceCell: (cell: HexCell) => void;
+  onMaxReinforceCell?: (cell: HexCell) => void;
   theme: Theme;
   fogOfWarEnabled: boolean;
   isHumanTurn: boolean;
@@ -30,6 +32,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   onSelectCell,
   onExecuteAction,
   onReinforceCell,
+  onMaxReinforceCell,
   theme,
   fogOfWarEnabled,
   isHumanTurn,
@@ -48,6 +51,27 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     k: 1,
   });
 
+  // Hold-to-Max Reinforcement timers
+  const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const holdIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isHoldActiveRef = useRef<boolean>(false);
+
+  const clearHoldTimers = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    if (holdIntervalRef.current) {
+      clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+    isHoldActiveRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    return () => clearHoldTimers();
+  }, [clearHoldTimers]);
+
   // Hex geometry size
   const hexRadius = 42;
   const isDark = theme === 'dark';
@@ -57,6 +81,25 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     () => cells.find(c => c.id === selectedCellId) || null,
     [cells, selectedCellId]
   );
+
+  // Set of player-owned cell IDs that currently have valid attack targets available
+  const attackReadyCellIds = useMemo(() => {
+    if (turnPhase !== 'attack' || !isHumanTurn) return new Set<string>();
+    const ready = new Set<string>();
+    const playerCells = cells.filter(c => c.owner === 0 && c.units > 1 && c.burnedOutTurns <= 0);
+    for (const pc of playerCells) {
+      const neighbors = getNeighbors(pc);
+      const hasTarget = cells.some(
+        other => neighbors.some(n => n.q === other.q && n.r === other.r) &&
+                 other.owner !== 0 &&
+                 !other.stormActive
+      );
+      if (hasTarget) {
+        ready.add(pc.id);
+      }
+    }
+    return ready;
+  }, [cells, turnPhase, isHumanTurn]);
 
   // Keep reference to latest cells without re-triggering camera calculations
   const cellsRef = useRef(cells);
@@ -245,6 +288,15 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
     if (fogOfWarEnabled && !cell.revealed) return;
 
+    // In Reinforce Phase, clicking an owned tile reinforces it directly if pool has points
+    if (turnPhase === 'reinforce' && cell.owner === 0) {
+      if (reinforcementPool > 0 && cell.units < MAX_CELL_UNITS && cell.burnedOutTurns === 0) {
+        soundFx.playCapture();
+        onReinforceCell(cell);
+        return;
+      }
+    }
+
     // If clicking an owned friendly cell: select it (or toggle off)
     if (cell.owner === 0) {
       if (selectedCell && selectedCell.id === cell.id) {
@@ -257,14 +309,44 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       return;
     }
 
-    // If clicking an adjacent enemy or neutral attack target
-    if (selectedCell && areHexesAdjacent(selectedCell, cell) && selectedCell.units > 1 && cell.owner !== selectedCell.owner) {
+    // If clicking an adjacent enemy or neutral attack target during attack phase
+    if (turnPhase === 'attack' && selectedCell && areHexesAdjacent(selectedCell, cell) && selectedCell.units > 1 && cell.owner !== selectedCell.owner) {
       onExecuteAction(cell);
       return;
     }
 
     // Deselect when clicking non-adjacent neutral/enemy
     onSelectCell(null);
+  };
+
+  // Hold-to-Max Reinforcement: rapid fire + burst fill
+  const handleStartHoldReinforce = (cell: HexCell, e: React.PointerEvent | React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isHumanTurn || turnPhase !== 'reinforce' || reinforcementPool <= 0) return;
+    clearHoldTimers();
+
+    const maxCap = getCellMaxUnits(cell);
+    if (cell.units >= maxCap || cell.burnedOutTurns > 0) return;
+
+    // Immediate 1 increment
+    soundFx.playCapture();
+    onReinforceCell(cell);
+
+    // Hold threshold: after 240ms, rapidly pulse reinforcements
+    holdTimerRef.current = setTimeout(() => {
+      isHoldActiveRef.current = true;
+      let ticks = 0;
+      holdIntervalRef.current = setInterval(() => {
+        ticks++;
+        if (ticks >= 5 && onMaxReinforceCell) {
+          // If held for ~600ms, immediately burst-fill to max capacity!
+          onMaxReinforceCell(cell);
+          clearHoldTimers();
+        } else {
+          onReinforceCell(cell);
+        }
+      }, 70);
+    }, 240);
   };
 
   // Direct reinforcement button on cell
@@ -283,8 +365,14 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       ref={containerRef}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerUp={() => {
+        clearHoldTimers();
+        handlePointerUp();
+      }}
+      onPointerCancel={() => {
+        clearHoldTimers();
+        handlePointerUp();
+      }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       className="relative flex-1 w-full h-full overflow-hidden select-none cursor-grab active:cursor-grabbing touch-none"
@@ -339,13 +427,19 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             const isSelected = selectedCellId === cell.id;
             const isTarget = targetOptions.some(opt => opt.target.id === cell.id);
             const isFog = fogOfWarEnabled && !cell.revealed;
-            const canBeReinforced = cell.owner === 0 && reinforcementPool > 0 && cell.units < MAX_CELL_UNITS && cell.burnedOutTurns === 0;
+            const maxCap = getCellMaxUnits(cell);
+            const isStronghold = maxCap === 12;
+            const isAttackReady = attackReadyCellIds.has(cell.id);
+            const canBeReinforced = turnPhase === 'reinforce' && cell.owner === 0 && reinforcementPool > 0 && cell.units < maxCap && cell.burnedOutTurns === 0;
 
             const fillColor = isFog
               ? isDark ? '#0d130e' : '#d1cbbd'
               : getPlayerBg(cell.owner, theme);
+
             const strokeColor = isSelected
               ? isDark ? '#4ade80' : '#15803d'
+              : isAttackReady
+              ? isDark ? '#34d399' : '#059669'
               : isFog
               ? isDark ? '#1a291e' : '#b5aea0'
               : getPlayerColor(cell.owner, theme);
@@ -356,6 +450,9 @@ export const GameBoard: React.FC<GameBoardProps> = ({
               <g
                 key={cell.id}
                 onClick={e => handleCellClick(cell, e)}
+                onPointerUp={clearHoldTimers}
+                onPointerLeave={clearHoldTimers}
+                onPointerCancel={clearHoldTimers}
                 className="cursor-pointer transition-transform duration-100"
               >
                 {/* Hexagon Body */}
@@ -363,10 +460,60 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                   points={polygonPoints}
                   fill={fillColor}
                   stroke={strokeColor}
-                  strokeWidth={isSelected ? 3.5 : isTarget ? 2.5 : 1.5}
+                  strokeWidth={isSelected ? 3.5 : isTarget ? 2.5 : isAttackReady ? 2.8 : 1.5}
                   strokeDasharray={isTarget ? '4 2' : undefined}
                   className="transition-colors duration-150"
                 />
+
+                {/* Attackable Cell Tactical Visual Accent (Instant Tactical Clarity) */}
+                {isAttackReady && !isSelected && !isFog && (
+                  <g>
+                    <polygon
+                      points={getHexPolygonPoints(x, y, hexRadius - 3.5)}
+                      fill="none"
+                      stroke={isDark ? '#34d399' : '#059669'}
+                      strokeWidth={1.5}
+                      strokeDasharray="4 2"
+                      className="animate-pulse"
+                    />
+                    {/* Tactical Target Indicator Pip */}
+                    <circle
+                      cx={x}
+                      cy={y - hexRadius + 7}
+                      r={2.5}
+                      fill={isDark ? '#34d399' : '#059669'}
+                      className="animate-ping"
+                    />
+                  </g>
+                )}
+
+                {/* 12-Capacity Fortified Stronghold Indicator Overlay */}
+                {isStronghold && !isFog && (
+                  <polygon
+                    points={getHexPolygonPoints(x, y, hexRadius - 5)}
+                    fill="none"
+                    stroke={strokeColor}
+                    strokeWidth={1}
+                    strokeDasharray="3 3"
+                    opacity={0.65}
+                  />
+                )}
+
+                {/* Capacity Label */}
+                {!isFog && (
+                  <text
+                    x={x}
+                    y={y - 16}
+                    textAnchor="middle"
+                    fill={strokeColor}
+                    opacity={isStronghold ? 0.9 : 0.45}
+                    fontSize="7"
+                    fontWeight={isStronghold ? 'bold' : 'normal'}
+                    fontFamily="monospace"
+                  >
+                    {isStronghold ? '★ FORT:12' : 'CAP:8'}
+                  </text>
+                )}
 
                 {/* EM Storm Overlay */}
                 {cell.stormActive && !isFog && (
@@ -446,26 +593,35 @@ export const GameBoard: React.FC<GameBoardProps> = ({
                   </g>
                 )}
 
-                {/* Direct Reinforcement Badge on Hex (+1) when pool > 0 */}
+                {/* Direct Reinforcement Badge on Hex (+1) with Hold-to-Max support */}
                 {canBeReinforced && (
                   <g
+                    onPointerDown={e => handleStartHoldReinforce(cell, e)}
+                    onPointerUp={clearHoldTimers}
+                    onPointerLeave={clearHoldTimers}
+                    onContextMenu={e => {
+                      e.preventDefault();
+                      onMaxReinforceCell?.(cell);
+                    }}
                     onClick={e => handleDirectReinforce(cell, e)}
                     className="cursor-pointer group"
                   >
+                    <title>Tap for +1, Hold to Max</title>
                     <circle
                       cx={x + 18}
                       cy={y - 18}
-                      r={9}
+                      r={10}
                       fill={isDark ? '#065f46' : '#10b981'}
                       stroke="#34d399"
-                      strokeWidth={1.2}
+                      strokeWidth={1.3}
+                      className="animate-pulse"
                     />
                     <text
                       x={x + 18}
-                      y={y - 15}
+                      y={y - 14.5}
                       textAnchor="middle"
                       fill="#ffffff"
-                      fontSize="10"
+                      fontSize="11"
                       fontWeight="bold"
                       fontFamily="monospace"
                     >

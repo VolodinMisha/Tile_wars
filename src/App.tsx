@@ -9,6 +9,7 @@ import {
   HexCell,
   CellOwner,
   GameLogEntry,
+  TurnPhase,
 } from './game/types';
 import { generateBoardCells } from './game/hex';
 import {
@@ -17,10 +18,14 @@ import {
   updateFogOfWar,
   calculateReinforcements,
   applyManualReinforcement,
+  applyMaxManualReinforcement,
   distributeReinforcements,
+  distributeFrontlineReinforcements,
   tickRoundHazards,
   checkAndExecuteEmergencyTransfer,
   checkGameState,
+  getCellMaxUnits,
+  liftStormIfLastTarget,
 } from './game/rules';
 import { CAMPAIGN_LEVELS, getStaticCampaignMap } from './game/campaign';
 import { computeBotMoves } from './game/bot';
@@ -61,6 +66,7 @@ export default function App() {
   // In-Game State
   const [cells, setCells] = useState<HexCell[]>([]);
   const [turn, setTurn] = useState<number>(1);
+  const [turnPhase, setTurnPhase] = useState<TurnPhase>('attack');
   const [activePlayer, setActivePlayer] = useState<CellOwner>(0);
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null);
   const [overclockActive, setOverclockActive] = useState<boolean>(false);
@@ -156,21 +162,22 @@ export default function App() {
 
     setCells(initialCells);
     setTurn(1);
+    setTurnPhase('attack');
     setActivePlayer(0);
     setSelectedCellId(null);
     setOverclockActive(false);
-    setReinforcementPool(initialPool);
+    setReinforcementPool(0);
     setGameState('in_progress');
     setSettings(s);
     setScreen('playing');
     setResetCameraTrigger(prev => prev + 1);
 
     const initMsgEn = s.gameType === 'campaign'
-      ? `MISSION ${s.selectedCampaignLevel} DEPLOYED. ${initialPool} reinforcement points ready for manual allocation.`
-      : `CUSTOM WARGAME INITIALIZED. ${initialPool} reinforcement points ready for manual allocation.`;
+      ? `MISSION ${s.selectedCampaignLevel} DEPLOYED. PHASE 1: Attack enemy sectors. Click 'Finish Attacks' when done.`
+      : `CUSTOM WARGAME INITIALIZED. PHASE 1: Attack enemy sectors. Click 'Finish Attacks' when done.`;
     const initMsgUa = s.gameType === 'campaign'
-      ? `МІСІЮ ${s.selectedCampaignLevel} РОЗГОРНУТО. ${initialPool} очок підкріплень готові до ручного розподілу.`
-      : `КАСТОМНУ ГРУ ІНІЦІАЛІЗОВАНО. ${initialPool} очок підкріплень готові до ручного розподілу.`;
+      ? `МІСІЮ ${s.selectedCampaignLevel} РОЗГОРНУТО. ФАЗА 1: Штурмуйте сектори ворога. Натисніть 'Закінчити атаку' після завершення.`
+      : `КАСТОМНУ ГРУ ІНІЦІАЛІЗОВАНО. ФАЗА 1: Штурмуйте сектори ворога. Натисніть 'Закінчити атаку' після завершення.`;
 
     setLogs([
       {
@@ -208,6 +215,69 @@ export default function App() {
     }
   };
 
+  // Hold-to-Max / One-tap Max Reinforcement handler
+  const handleMaxReinforceCell = (targetCell: HexCell) => {
+    if (activePlayer !== 0 || reinforcementPool <= 0 || gameState !== 'in_progress') return;
+
+    const res = applyMaxManualReinforcement(targetCell, 0, reinforcementPool);
+    if (res.success) {
+      soundFx.playCapture();
+      setReinforcementPool(res.newPool);
+      setCells([...cells]);
+      addLog(
+        'growth',
+        `Sector [${targetCell.q},${targetCell.r}] fortified (+${res.added} units, garrison now ${targetCell.units}/${getCellMaxUnits(targetCell)}). (${res.newPool} pts left)`,
+        `Сектор [${targetCell.q},${targetCell.r}] укріплено (+${res.added} од., гарнізон тепер ${targetCell.units}/${getCellMaxUnits(targetCell)}). (Залишилось ${res.newPool} очок)`
+      );
+    } else {
+      soundFx.playLoss();
+    }
+  };
+
+  // Phase 1 to Phase 2: Finish Attacks and calculate Reinforcement Points based on controlled nodes
+  const handleFinishAttacks = () => {
+    if (activePlayer !== 0 || gameState !== 'in_progress') return;
+    soundFx.playClick();
+    setSelectedCellId(null);
+    setOverclockActive(false);
+
+    // Calculate reinforcement points based on player's currently owned tiles
+    const playerControlledCount = cells.filter(c => c.owner === 0).length;
+    const points = calculateReinforcements(playerControlledCount);
+    setReinforcementPool(points);
+    setTurnPhase('reinforce');
+
+    addLog(
+      'growth',
+      `PHASE 2 (REINFORCEMENTS): +${points} reinforcement points ready for frontline deployment (${playerControlledCount} nodes controlled).`,
+      `ФАЗА 2 (ПІДКРІПЛЕННЯ): +${points} очок підкріплень готові до розподілу по лінії фронту (контролюється ${playerControlledCount} вузлів).`
+    );
+  };
+
+  // Phase 2: Automatically deploy reinforcements evenly along frontline tiles, then advance to AI Bot turns
+  const handleAutoDeployReinforcements = () => {
+    if (activePlayer !== 0 || gameState !== 'in_progress') return;
+    soundFx.playClick();
+    setSelectedCellId(null);
+
+    let activeCells = [...cells];
+    const poolToDeploy = reinforcementPool;
+
+    if (poolToDeploy > 0) {
+      const deployed = distributeFrontlineReinforcements(activeCells, 0, poolToDeploy);
+      soundFx.playCapture();
+      setReinforcementPool(0);
+      setCells([...activeCells]);
+      addLog(
+        'growth',
+        `FRONTLINE REINFORCED: +${deployed} units deployed across front-line tactical positions. Initiating adversary phase.`,
+        `ЛІНІЮ ФРОНТУ ПІДСИЛЕНО: +${deployed} одиниць розподілено по передових позиціях. Передача ходу супротивнику.`
+      );
+    }
+
+    runBotTurns(activeCells);
+  };
+
   // Toggle Overclock
   const handleToggleOverclock = () => {
     const next = !overclockActive;
@@ -241,7 +311,8 @@ export default function App() {
 
     // Enemy Assault
     soundFx.playAttack();
-    const result = resolveCombat(selectedCell.units, target.units, overclockActive);
+    const targetMax = getCellMaxUnits(target);
+    const result = resolveCombat(selectedCell.units, target.units, overclockActive, undefined, targetMax);
 
     if (result.success) {
       soundFx.playCapture();
@@ -280,6 +351,9 @@ export default function App() {
       }
     }
 
+    // Ensure storms never block the last uncaptured cell
+    liftStormIfLastTarget(cells);
+
     setCells([...cells]);
     setSelectedCellId(null);
     setOverclockActive(false);
@@ -316,8 +390,8 @@ export default function App() {
 
       setActivePlayer(owner);
 
-      // Bot distributes reinforcements automatically before moves
-      distributeReinforcements(activeCells, owner);
+      // Bot distributes reinforcements automatically before moves based on difficulty
+      distributeReinforcements(activeCells, owner, settings.botDifficulty);
 
       // Bot executes moves
       const botMoves = computeBotMoves(activeCells, owner, settings.botDifficulty);
@@ -331,7 +405,8 @@ export default function App() {
         const target = activeCells.find(c => c.id === move.target.id);
 
         if (origin && target && origin.units > 1 && !target.stormActive && target.owner !== origin.owner) {
-          const combat = resolveCombat(origin.units, target.units, move.overclock);
+          const targetMax = getCellMaxUnits(target);
+          const combat = resolveCombat(origin.units, target.units, move.overclock, undefined, targetMax);
             if (combat.success) {
               origin.units = combat.attackerUnitsRemaining;
               target.units = combat.defenderUnitsRemaining;
@@ -353,6 +428,8 @@ export default function App() {
         }
       }
     }
+
+    liftStormIfLastTarget(activeCells);
 
     // End of round:
     // 1. Tick hazards & EM storms
@@ -407,19 +484,20 @@ export default function App() {
       soundFx.playDefeat();
     }
 
-    // Calculate new player reinforcement points for next turn based on captured hexes
     const playerControlledCount = activeCells.filter(c => c.owner === 0).length;
-    const newReinforcementPoints = calculateReinforcements(playerControlledCount);
 
     setCells([...activeCells]);
     setTurn(prev => prev + 1);
-    setReinforcementPool(newReinforcementPoints); // New pool points to distribute
+    setTurnPhase('attack'); // Reset to Phase 1: Attack for new cycle
+    setReinforcementPool(0); // Reinforcements allocated when entering Phase 2
     setActivePlayer(0); // Return control to human player
+    setSelectedCellId(null);
+    setOverclockActive(false);
 
     addLog(
       'growth',
-      `CYCLE ${turn + 1}: Received +${newReinforcementPoints} reinforcement points based on ${playerControlledCount} controlled sectors.`,
-      `ЦИКЛ ${turn + 1}: Отримано +${newReinforcementPoints} очок підкріплень за ${playerControlledCount} підконтрольних секторів.`
+      `CYCLE ${turn + 1}: Human command phase initiated (${playerControlledCount} sectors held). Phase 1: Attack.`,
+      `ЦИКЛ ${turn + 1}: Командний цикл гравця (${playerControlledCount} секторів під контролем). Фаза 1: Атака.`
     );
   }, [settings, turn, addLog, campaignUnlocked]);
 
@@ -431,19 +509,10 @@ export default function App() {
     setSelectedCellId(null);
     setOverclockActive(false);
 
-    // Auto-allocate any leftover unspent reinforcement points to weakest cells so none are wasted
+    // Auto-allocate any unspent points along frontline tiles
     let activeCells = [...cells];
     if (reinforcementPool > 0) {
-      const owned = activeCells.filter(c => c.owner === 0 && c.burnedOutTurns <= 0);
-      owned.sort((a, b) => a.units - b.units);
-      let remaining = reinforcementPool;
-      for (const c of owned) {
-        if (remaining <= 0) break;
-        if (c.units < 12) {
-          c.units += 1;
-          remaining -= 1;
-        }
-      }
+      distributeFrontlineReinforcements(activeCells, 0, reinforcementPool);
       setReinforcementPool(0);
       setCells([...activeCells]);
     }
@@ -480,9 +549,11 @@ export default function App() {
               onSelectCell={cell => setSelectedCellId(cell ? cell.id : null)}
               onExecuteAction={handleExecuteAction}
               onReinforceCell={handleReinforceCell}
+              onMaxReinforceCell={handleMaxReinforceCell}
               theme={settings.theme}
               fogOfWarEnabled={settings.modes.fogOfWar}
               isHumanTurn={activePlayer === 0 && gameState === 'in_progress'}
+              turnPhase={turnPhase}
               overclockActive={overclockActive}
               reinforcementPool={reinforcementPool}
               resetTrigger={resetCameraTrigger}
@@ -495,14 +566,18 @@ export default function App() {
               turn={turn}
               activePlayer={activePlayer}
               isHumanTurn={activePlayer === 0}
+              turnPhase={turnPhase}
               cells={cells}
               selectedCell={selectedCell}
               overclockActive={overclockActive}
               reinforcementPool={reinforcementPool}
               onToggleOverclock={handleToggleOverclock}
+              onFinishAttacks={handleFinishAttacks}
+              onAutoDeployReinforcements={handleAutoDeployReinforcements}
               onEndTurn={handleEndTurn}
               onDeselect={() => setSelectedCellId(null)}
               onReinforceCell={handleReinforceCell}
+              onMaxReinforceCell={handleMaxReinforceCell}
               onResetCamera={() => setResetCameraTrigger(prev => prev + 1)}
               onAbortToMenu={() => {
                 soundFx.playClick();
